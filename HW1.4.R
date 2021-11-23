@@ -15,20 +15,49 @@
 # Хорошо Шарп 0.9
 # Отлично Шарп 1
 
+# Переопределяю функцию подбора весов
+getWeights_2 <- function(data, periods) {
+  
+  backtest.data.by.stock <- lapply(1:dim(data)[2], function(stock) {
+    stock.batch.data <- lapply(periods, function(period) {
+      period.batch.data <- data[, stock]
+      period.batch.lenght <- length(period.batch.data)
+      period.batch <- (period.batch.data[period.batch.lenght] / period.batch.data[period.batch.lenght - period]) - 1
+      return(period.batch)
+    })
+    stock.batch.data <- do.call(cbind, stock.batch.data)
+    stock.batch <- apply(stock.batch.data, 1, mean)
+    return(stock.batch)
+  })
+  
+  backtest.data.by.stock <- do.call(cbind, backtest.data.by.stock)
+  backtest.data.by.stock <- set_colnames(backtest.data.by.stock, stocks)
+  
+  if (length(backtest.data.by.stock[backtest.data.by.stock > 1.005]) > 0) {
+    result <- ifelse(1:length(stocks) %in% which(backtest.data.by.stock > 1.005), 1, 0)
+    result <- result / length(result[result == 1])
+  } else {
+    result <- ifelse(1:length(stocks) == which.min(backtest.data.by.stock), 1, 0)
+  }
+  
+  return(result)
+}
 
-max.value <- floor(dim(backtest.data)[1] * 1)
+max.value <- floor(dim(backtest.data)[1] * 0.3)
 repeat {
   
-  holding.period.temp <- sample(1:max.value, 1)
-  periods.temp <- sort(c(sample(1:max.value, 1), sample(1:max.value, 1), sample(1:max.value, 1)))
+  holding.period.temp <- sample(1:100, 1)
+  periods.temp <- sort(sample(1:max.value, sample(1:10, 1)))
   
-  pnl.full <- base.strategy(periods = periods.temp, holding.period = holding.period.temp)
+  pnl.full <- base.strategy(periods = periods.temp, holding.period = holding.period.temp, use.new_fun = TRUE)
   
   loockback.indent <- max(periods.temp) + 2
   pnl.lookback <- pnl.full[loockback.indent:length(pnl.full)]
   
   sharpe <- sharpe_fun(pnl.lookback)
-  
+  print(paste(periods.temp, collapse = ', '))
+  print(holding.period.temp)
+  print(sharpe)
   if (sharpe >= 1 || is.na(sharpe)) {
     print(sprintf('Periods = %s, holding.period = %s', paste(periods.temp, collapse = ', '), holding.period.temp))
     print(sprintf('Sharpe = %s', sharpe))
@@ -36,18 +65,13 @@ repeat {
   }
 }
 
+
 # Ответ
-
-# На коротком отрезке времени легко полчить высокие значения sharpe
-# Для max.value <- dim(backtest.data)[1] 
-# Получаем: Periods = 3530, 4416, 4428, holding.period = 1819 -> Sharpe = 1.0575 > 1
-
-
 {
-  periods.best <- c(3530, 4416, 4428)
-  holding.period.best <- 1819
+  periods.best <- c(22, 589, 649, 693, 1048, 1436, 1660)
+  holding.period.best <- 4
   
-  pnl.best <- base.strategy(periods = periods.best, holding.period = holding.period.best)
+  pnl.best <- base.strategy(periods = periods.best, holding.period = holding.period.best, use.new_fun = TRUE)
   sharpe.best <- sharpe_fun(pnl.best[(max(periods.best) + 2):length(pnl.best)])
   
   nav.best <- portfolio.value(money, pnl.best)[(max(periods.best) + 2):length(pnl.best)]
@@ -55,5 +79,5 @@ repeat {
   
   print(sprintf('Periods = %s, holding.period = %s', paste(periods.best, collapse = ', '), holding.period.best))
   print(sprintf('Sharpe = %s', sharpe.best))
+  print(sprintf('Lookback = %s', round(1 - length(nav.best) / dim(backtest.data)[1], 2)))
 }
-
