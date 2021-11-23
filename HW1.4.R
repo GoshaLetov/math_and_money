@@ -33,17 +33,22 @@ getWeights_2 <- function(data, periods) {
   backtest.data.by.stock <- do.call(cbind, backtest.data.by.stock)
   backtest.data.by.stock <- set_colnames(backtest.data.by.stock, stocks)
   
-  if (length(backtest.data.by.stock[backtest.data.by.stock > 1.005]) > 0) {
-    result <- ifelse(1:length(stocks) %in% which(backtest.data.by.stock > 1.005), 1, 0)
-    result <- result / length(result[result == 1])
-  } else {
-    result <- ifelse(1:length(stocks) == which.min(backtest.data.by.stock), 1, 0)
-  }
+  return.postive <- backtest.data.by.stock[which(backtest.data.by.stock >= 0)]
+  retuen.negative <- backtest.data.by.stock[which(backtest.data.by.stock < 0)]
+  
+  # Покупаем акцию, которая имеет наименьшую доходность
+  # Предположение: Если актив глобально в просадке, можно ожидать, что он вырастет
+  result <- ifelse(1:length(stocks) == which.min(backtest.data.by.stock), 1, 0)
   
   return(result)
 }
 
-max.value <- floor(dim(backtest.data)[1] * 0.3)
+
+
+getWeights_2(backtest.data, periods)
+
+set.seed(1)
+max.value <- floor(dim(backtest.data)[1] * 0.4)
 repeat {
   
   holding.period.temp <- sample(1:100, 1)
@@ -55,8 +60,6 @@ repeat {
   pnl.lookback <- pnl.full[loockback.indent:length(pnl.full)]
   
   sharpe <- sharpe_fun(pnl.lookback)
-  print(paste(periods.temp, collapse = ', '))
-  print(holding.period.temp)
   print(sharpe)
   if (sharpe >= 1 || is.na(sharpe)) {
     print(sprintf('Periods = %s, holding.period = %s', paste(periods.temp, collapse = ', '), holding.period.temp))
@@ -65,6 +68,9 @@ repeat {
   }
 }
 
+#
+# Periods = 291, 375, 611, 676, 1699, holding.period = 29
+# Sharpe = 1.11966735665325
 
 # Ответ
 {
@@ -79,5 +85,5 @@ repeat {
   
   print(sprintf('Periods = %s, holding.period = %s', paste(periods.best, collapse = ', '), holding.period.best))
   print(sprintf('Sharpe = %s', sharpe.best))
-  print(sprintf('Lookback = %s', round(1 - length(nav.best) / dim(backtest.data)[1], 2)))
+  print(sprintf('Lookback = %s%s of total time range', round(1 - length(nav.best) / dim(backtest.data)[1], 2), '%'))
 }

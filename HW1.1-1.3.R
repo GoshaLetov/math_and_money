@@ -139,6 +139,7 @@ backtest.data <- coredata(backtest.data)
 # Вторым аргументом подается вектор из трех элементов, отражающий длины периодов для вычислений средней доходности
 # по отдельности для каждого из инструментов.
 
+
 getWeights <- function(data, periods) {
   
   backtest.data.by.stock <- lapply(1:dim(data)[2], function(stock) {
@@ -157,11 +158,11 @@ getWeights <- function(data, periods) {
   backtest.data.by.stock <- set_colnames(backtest.data.by.stock, stocks)
   
   if((backtest.data.by.stock[, 'IWM'] < 0) & (backtest.data.by.stock[, 'SPY'] < 0)){
-    result <- c(0, 0, 1)
+    result <- ifelse(stocks == 'TLT', 1, 0)
   } else if(backtest.data.by.stock[, 'SPY'] < backtest.data.by.stock[, 'IWM']){
-    result <- c(1, 0, 0)
+    result <- ifelse(stocks == 'IWM', 1, 0)
   } else{
-    result <- c(0, 1, 0)
+    result <- ifelse(stocks == 'SPY', 1, 0)
   }
   return(result)
 }
@@ -262,7 +263,7 @@ sharpe_fun       <- function(pnl) {
 max_drawdown_fun <- function(pnl) {
   nav <- cumsum(pnl)
   drawdown <- nav - cummax(nav)
-  return(max(drawdown))
+  return(min(drawdown))
 }
 
 
@@ -279,8 +280,101 @@ functions <- list(
 # Используйте lapply для того, чтобы итерироваться по функциям
 # и применять их на вектор прибылей и убытков за каждый день (pnl_inc)
 
-strategy.kpi <- lapply(functions, function(fun) {
-  kpi.batch <- fun(pnl_inc)
-})
-strategy.kpi <- do.call(cbind, strategy.kpi)
-strategy.kpi <- set_names(strategy.kpi, names(functions))
+kpi.calculate <- function(functions, pnl) {
+  kpi.values <- lapply(functions, function(fun) {
+    kpi.batch <- fun(pnl)
+  })
+  kpi.values <- do.call(cbind, kpi.values)
+  kpi.values <- set_names(kpi.values, names(functions))
+  return(kpi.values[1, ])
+}
+
+kpi.calculate(functions, pnl_inc)
+
+####################################################################################
+# HW 3
+# В нашем бэктесте есть один недостаток. Если начать бэктест на день позже, то pnl портфеля будет другим.
+# Сдвигая еще на день снова получим другой результат, если сдвинем ровно на holding.period, тогда получим
+# такой же pnl, что и в задании выше, но количество неторговых дней будет увеличено на holding.period точек.
+# Составим holding.period бэктестов сдвигая торговлю на один день, усредним их pnl по дням. 
+# Такой бэктест уже не будет зависеть от выбора точки начала бэктеста.
+# Еще мы никак не учли торговые издержки. Положим их равными 0.0005 от модуля изменения позиции.
+# Например, если у нас было 30 акций SPY, а стало 10 и цена SPY 250, то издержки равны |30 - 10| * 250 * 0.0005
+# Эти издержки должны быть вычтены из дневной прибыли/убытка.
+
+
+com <- 0.0005
+
+base.strategy.while.loop <- function(day, start.trade.day, lookback, periods, holding.period, use.new_fun = FALSE) {
+  
+  pnl_inc_leg <- matrix(0L, nrow = nrow(backtest.data), ncol = ncol(backtest.data))
+  pnl_inc_leg <- set_colnames(pnl_inc_leg, stocks)
+  
+  yesterday.assets.count <- numeric(ncol(backtest.data))
+  assets.count <- yesterday.assets.count
+  
+  trade.day <- day + start.trade.day
+  
+  while (day <= nrow(backtest.data)) {
+    # Изменение в каждой позиции * Цена позиции (за прошлый день, т.к. операция была совершена вчера)
+    # * Торговые издержки 
+    costs <- abs(assets.count - yesterday.assets.count) * backtest.data[day - 1,] * com
+    
+    pnl_inc_leg[day,] <- (assets.count  * (backtest.data[day,] - backtest.data[day - 1,])) - costs
+    
+    if (day < trade.day) {
+      day <- day + 1 
+      next
+    }
+    
+    range <- (day - lookback):day
+    if (use.new_fun) {
+      cur.weights <- getWeights_2(backtest.data[range, ], periods)
+    } else {
+      cur.weights <- getWeights(backtest.data[range, ], periods)  
+    }
+    
+    
+    yesterday.assets.count <- assets.count
+    assets.count <- floor(money * cur.weights / backtest.data[day, ] 
+                          # корректируем количество активов, которые мы можем приобрести
+                          # из-за появления торговых издержек
+                          / (1 + com))
+    day <- day + 1
+    trade.day <- trade.day + holding.period
+  }
+  
+  pnl_inc <- rowSums(pnl_inc_leg)
+  return(pnl_inc)
+}
+
+base.strategy <- function(periods, holding.period, use.new_fun = FALSE) {
+  
+  lookback <- max(periods)
+  
+  day <- lookback + 1
+  
+  # Проводим бек-тестирование для каждого дня для того, чтобы убрать погрещность holding.period
+  pnl_inc_leg.full <- lapply(0:(holding.period - 1), function(start.day) {
+    pnl_inc_leg.batch <- base.strategy.while.loop(
+      day = day
+      , start.trade.day = start.day
+      , lookback = lookback
+      , periods = periods
+      , holding.period = holding.period
+      , use.new_fun = use.new_fun
+    )
+  })
+  pnl_inc_leg.full <- do.call(cbind, pnl_inc_leg.full)
+  pnl_inc_leg.mean <- apply(pnl_inc_leg.full, 1, mean)
+  
+  return(pnl_inc_leg.mean)
+}
+
+portfolio.value <- function(money, pnl) {
+  return(money + cumsum(pnl))
+}
+
+pnl.with.costs <- base.strategy(periods, holding.period)
+plot(portfolio.value(money, pnl.with.costs), type = 'l')
+kpi.calculate(functions, pnl.with.costs)

@@ -139,6 +139,7 @@ backtest.data <- coredata(backtest.data)
 # Вторым аргументом подается вектор из трех элементов, отражающий длины периодов для вычислений средней доходности
 # по отдельности для каждого из инструментов.
 
+
 getWeights <- function(data, periods) {
   
   backtest.data.by.stock <- lapply(1:dim(data)[2], function(stock) {
@@ -157,11 +158,11 @@ getWeights <- function(data, periods) {
   backtest.data.by.stock <- set_colnames(backtest.data.by.stock, stocks)
   
   if((backtest.data.by.stock[, 'IWM'] < 0) & (backtest.data.by.stock[, 'SPY'] < 0)){
-    result <- c(0, 0, 1)
+    result <- ifelse(stocks == 'TLT', 1, 0)
   } else if(backtest.data.by.stock[, 'SPY'] < backtest.data.by.stock[, 'IWM']){
-    result <- c(1, 0, 0)
+    result <- ifelse(stocks == 'IWM', 1, 0)
   } else{
-    result <- c(0, 1, 0)
+    result <- ifelse(stocks == 'SPY', 1, 0)
   }
   return(result)
 }
@@ -279,10 +280,6 @@ functions <- list(
 # Используйте lapply для того, чтобы итерироваться по функциям
 # и применять их на вектор прибылей и убытков за каждый день (pnl_inc)
 
-strategy.kpi <- lapply(functions, function(fun) {
-  kpi.batch <- fun(pnl_inc)
-})
-
 kpi.calculate <- function(functions, pnl) {
   kpi.values <- lapply(functions, function(fun) {
     kpi.batch <- fun(pnl)
@@ -293,7 +290,6 @@ kpi.calculate <- function(functions, pnl) {
 }
 
 kpi.calculate(functions, pnl_inc)
-
 
 ####################################################################################
 # HW 3
@@ -380,7 +376,7 @@ portfolio.value <- function(money, pnl) {
 }
 
 pnl.with.costs <- base.strategy(periods, holding.period)
-plot(portfolio.value(money, strat.with.costs), type = 'l')
+plot(portfolio.value(money, pnl.with.costs), type = 'l')
 kpi.calculate(functions, pnl.with.costs)
 
 ####################################################################################
@@ -418,17 +414,22 @@ getWeights_2 <- function(data, periods) {
   backtest.data.by.stock <- do.call(cbind, backtest.data.by.stock)
   backtest.data.by.stock <- set_colnames(backtest.data.by.stock, stocks)
   
-  if (length(backtest.data.by.stock[backtest.data.by.stock > 1.005]) > 0) {
-    result <- ifelse(1:length(stocks) %in% which(backtest.data.by.stock > 1.005), 1, 0)
-    result <- result / length(result[result == 1])
-  } else {
-    result <- ifelse(1:length(stocks) == which.min(backtest.data.by.stock), 1, 0)
-  }
+  return.postive <- backtest.data.by.stock[which(backtest.data.by.stock >= 0)]
+  retuen.negative <- backtest.data.by.stock[which(backtest.data.by.stock < 0)]
+  
+  # Покупаем акцию, которая имеет наименьшую доходность
+  # Предположение: Если актив глобально в просадке, можно ожидать, что он вырастет
+  result <- ifelse(1:length(stocks) == which.min(backtest.data.by.stock), 1, 0)
   
   return(result)
 }
 
-max.value <- floor(dim(backtest.data)[1] * 0.3)
+
+
+getWeights_2(backtest.data, periods)
+
+set.seed(1)
+max.value <- floor(dim(backtest.data)[1] * 0.4)
 repeat {
   
   holding.period.temp <- sample(1:100, 1)
@@ -440,8 +441,6 @@ repeat {
   pnl.lookback <- pnl.full[loockback.indent:length(pnl.full)]
   
   sharpe <- sharpe_fun(pnl.lookback)
-  print(paste(periods.temp, collapse = ', '))
-  print(holding.period.temp)
   print(sharpe)
   if (sharpe >= 1 || is.na(sharpe)) {
     print(sprintf('Periods = %s, holding.period = %s', paste(periods.temp, collapse = ', '), holding.period.temp))
@@ -450,6 +449,9 @@ repeat {
   }
 }
 
+#
+# Periods = 291, 375, 611, 676, 1699, holding.period = 29
+# Sharpe = 1.11966735665325
 
 # Ответ
 {
@@ -464,5 +466,5 @@ repeat {
 
   print(sprintf('Periods = %s, holding.period = %s', paste(periods.best, collapse = ', '), holding.period.best))
   print(sprintf('Sharpe = %s', sharpe.best))
-  print(sprintf('Lookback = %s', round(1 - length(nav.best) / dim(backtest.data)[1], 2)))
+  print(sprintf('Lookback = %s%s of total time range', round(1 - length(nav.best) / dim(backtest.data)[1], 2), '%'))
 }
