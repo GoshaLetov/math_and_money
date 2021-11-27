@@ -12,16 +12,20 @@ knitr::opts_chunk$set(eval = FALSE)
 
 ```{r, message=FALSE}
 library(readr)
+library(purrr)
 library(dplyr)
 library(ggplot2)
 library(lubridate)
 library(car) # для Q-Q графика с доверительными интервалами
+
+options(scipen = 999)
 ```
 
 Загрузим файл с тиковыми данными 
 
 ```{r, message=FALSE}
-ticks <- read_csv('ETHUSDT_2021-10_small.rds')
+ticks <- readRDS('ETHUSDT_2021-10_small.rds')
+ticks$time <- as_datetime(ticks$time / 1000)
 ticks
 ```
 
@@ -42,7 +46,16 @@ ticks
 
 ```{r}
 summarise_by_candle_id <- function(data, candle_id) {
-  # TODO
+  data$candle <- candle_id
+  candles <- data %>% group_by(candle) %>% summarise(
+      start = as_datetime(min(time))    # время открытия
+    , finish = as_datetime(max(time))   # время закрытия
+    , open = first(price)                     # O
+    , high = max(price)                       # H
+    , low = min(price)                        # L
+    , close = last(price)                     # C
+    , volume = sum(qty)                       # Объем
+  )
   return(candles)
 }
 ```
@@ -66,7 +79,7 @@ get_classic_candles <- function(data, period) {
 
 ```{r}
 classic_candles <- get_classic_candles(ticks, period(5, 'minute'))
-class_candles
+classic_candles
 ```
 
 
@@ -89,7 +102,7 @@ class_candles
 get_tick_candles <- function(data, candle_length) {
   # Получите вектор длины nrow(data), ставящий в соответствие номер свечи каждому наблюдению
   # из данных. Каждая свеча, кроме последней, должна быть длины candle_length.
-  candle_number <- # TODO
+  candle_number <- ceiling(1:nrow(ticks) / candle_length)
   
   candles <- summarise_by_candle_id(data, candle_number)
   return(candles)
@@ -131,7 +144,7 @@ tick_candles
 
 ```{r}
 cumsum_threshold <- function(data, threshold) {
-  # TODO
+  accumulated_value <- accumulate(data, ~if_else(.x >= threshold, .y, .x + .y))
   return(accumulated_value)
 }
 ```
@@ -144,12 +157,13 @@ get_candles_by_accumulated_value <- function(data, accumulated_value, threshold)
 
   # Получим логический вектор, значениям TRUE которого соотвествуют те тики, в которые накопленная
   # величина не меньше порога.
-  candle_start <- # TODO
+  candle_start <- cumsum_threshold(data[[accumulated_value]], threshold) > threshold
+  # candle_start <- accumulated_value >= threshold
   
   # Далее установим соответствия между каждым тиком и номером его свечи.
   # Получите вектор чисел, начиная с 0, возрастающий на единицу в индексах, где candle_start TRUE
   # (пользуйтесь неявным приведением логического вектора к числовому)
-  candle_number <- # TODO
+  candle_number <- cumsum(as.integer(candle_start))
   
   # ВАЖНО:
   # На данный момент тик, достигший порога объема, попадает в начало новой свечи. Иначе говоря,
@@ -169,7 +183,7 @@ get_candles_by_accumulated_value <- function(data, accumulated_value, threshold)
 
 ```{r}
 get_volume_candles <- function(data, threshold) {
-  # TODO
+  accumulated_volume <- 'qty'
   candles <- get_candles_by_accumulated_value(data, accumulated_volume, threshold)
   return(candles)
 }
@@ -195,7 +209,8 @@ volume_candles
 
 ```{r}
 get_dollar_candles <- function(data, threshold) {
-  # TODO
+  accumulated_money <- 'accumulated_money'
+  data$accumulated_money <- data$price * data$qty
   candles <- get_candles_by_accumulated_value(data, accumulated_money, threshold)
   return(candles)
 }
@@ -241,22 +256,17 @@ car::qqPlot(diff(dollar_candles$close))
 между числом покупателей и продавцов за период с начала свечи.
 Переход к новой свече происходит при превышении модулем этой разности определенного порога.
 
-Данный алгоритм позволяет получить больше свечек в моменты повышенной активности одной
-из подавляющих сторон и меньше, когда спрос и предложение сбалансированы.
+Данный алгоритм позволяет получить больше свечек в моменты повышенной активности одной из подавляющих сторон и меньше, когда спрос и предложение сбалансированы.
 Наша мотивация заключается в том, что сильное преобладание одной из сторон означает
 наличие крупных игроков, информированных трейдеров или важных событий для рынка.
-Тогда для построения алгоритмов и поиска закономерностей полезно иметь большую частоту данных
-именно в такие периоды активности, чем в периоды относительного спокойствия.
+Тогда для построения алгоритмов и поиска закономерностей полезно иметь большую частоту данных именно в такие периоды активности, чем в периоды относительного спокойствия.
 
 #### Дополним тиковые данные сторонами сделок
 
 Положительное изменение цены означает покупку, отрицательное - продажу.
-Отсутствие изменения цены в данном тике означает, что на данном уровне цены поглощен
-еще не весь предложенный/запрошенный по данной цене объем актива.
-Таких тиков может быть несколько подряд: до тех пор, пока цена не пробьет новый уровень,
-либо до изменения направления сделки, когда цена изменится из-за спрэда между бидом и аском.
-Таким образом, направление сделки, в которой цена не изменилась, совпадает с направлением
-предыдущей сделки, в которой произошло изменение цены.
+Отсутствие изменения цены в данном тике означает, что на данном уровне цены поглощен еще не весь предложенный/запрошенный по данной цене объем актива.
+Таких тиков может быть несколько подряд: до тех пор, пока цена не пробьет новый уровень, либо до изменения направления сделки, когда цена изменится из-за спрэда между бидом и аском.
+Таким образом, направление сделки, в которой цена не изменилась, совпадает с направлением предыдущей сделки, в которой произошло изменение цены.
 
 Для лучшего понимания устройства сделок можно ознакомится с биржевым стаканом и типами ордеров.
 Например, в этом блоге, есть достаточно наглядное описание:
@@ -269,12 +279,9 @@ price_delta <- c(NA, diff(ticks$price))
 **Примечание**:
 Функция diff стандартного пакета base убирает возникающую при вычислении разниц
 недостающую величину из начала массива (несколько, если окно разницы больше 1).
-Но так как далее мы хотим присоединить полученные результаты к исходному датафрейму,
-то для соответствия числа строк датафрейма длине нашего вектора приходится присоединить
-эту недостающую величину обратно в начало.
+Но так как далее мы хотим присоединить полученные результаты к исходному датафрейму, то для соответствия числа строк датафрейма длине нашего вектора приходится присоединить эту недостающую величину обратно в начало.
 
-Для того, чтобы заполнить стороны тиков, в которых цена не менялась, воспользуемся функцией
-na.locf() пакета zoo, интерполирующией все NA предыдущим non-NA значением:
+Для того, чтобы заполнить стороны тиков, в которых цена не менялась, воспользуемся функцией na.locf() пакета zoo, интерполирующией все NA предыдущим non-NA значением:
 
 ```{r}
 tick_side <- sign(price_delta)
@@ -301,10 +308,14 @@ ticks <- na.omit(ticks)
 
 ```{r}
 get_tick_imbalance_candles <- function(data, threshold) {
-  # TODO
+  tick_imbalance <- 'tick_imbalance'
+  data$tick_imbalance <- abs(cumsum(data$side))
   candles <- get_candles_by_accumulated_value(data, tick_imbalance, threshold)
   return(candles)
 }
+
+tick_imbalance <- get_tick_imbalance_candles(ticks, 100)
+tick_imbalance
 ```
 
 ### Свечи на основе дисбаланса объемов и денежной массы
@@ -318,19 +329,32 @@ get_tick_imbalance_candles <- function(data, threshold) {
 Свечи на основе дисбаланса сторгованного объема:
 ```{r}
 get_volume_imbalance_candles <- function(data, threshold) {
-  # TODO
+  volume_imbalance <- 'volume_imbalance'
+  data$volume_imbalance <- data$side * data$qty
   candles <- get_candles_by_accumulated_value(data, volume_imbalance, threshold)
   return(candles)
 }
+
+volume_imbalance <- get_volume_imbalance_candles(ticks, 1e2)
+volume_imbalance
 ```
 
 Свечи на основе дисбаланса сторгованной денежной массы:
 ```{r}
 get_dollar_imbalance_candles <- function(data, threshold) {
-  # TODO
+  dollar_imbalance <- 'dollar_imbalance'
+  data$dollar_imbalance <- data$side * data$qty * data$price
   candles <- get_candles_by_accumulated_value(data, dollar_imbalance, threshold)
   return(candles)
 }
+
+dollar_imbalance <- get_dollar_imbalance_candles(ticks, 1e2)
+dollar_imbalance
+```
+```{r}
+car::qqPlot(diff(tick_imbalance$close))
+car::qqPlot(diff(volume_imbalance$close))
+car::qqPlot(diff(dollar_imbalance$close))
 ```
 
 Подведем итоги.
@@ -363,7 +387,25 @@ get_dollar_imbalance_candles <- function(data, threshold) {
 # index - вектор дат, соответствующих значениям из input
 # threshold - пороговое значение
 cusum_filter <- function(input, index, threshold) {
-  # TODO
+  
+  sPos <- 0
+  sNeg <- 0
+  events <- numeric()
+  
+  #lapply(2:length(input[1:100]), function(idx) {
+  for (idx in 2:length(input)) {
+    sPos <- max(0, sPos + input[idx])
+    sNeg <- min(0, sNeg + input[idx])
+    if (sNeg <  (-threshold)) {
+      sNeg <- 0
+      events <- c(events, index[idx])
+    } else if (sPos > threshold) {
+      sPos <- 0
+      events <- c(events, index[idx])
+    }
+  }
+  # )
+  
   return(events)
 }
 ```
@@ -387,6 +429,7 @@ filter_candles <- function(candles, threshold) {
 ```{r}
 candles <- dollar_candles
 filtered_candles <- filter_candles(candles, 3)
+filtered_candles
 ```
 
 Визуализируем результаты работы фильтра:
